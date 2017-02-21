@@ -1,0 +1,15 @@
+service integrated-vtysh-config 
+
+interface swp1
+  ip ospf network point-to-point
+
+interface swp2
+  ip ospf network point-to-point
+
+router-id 10.2.1.2
+
+router ospf
+  ospf router-id 10.2.1.2                                                           
+  network 10.2.1.2/32 area 0.0.0.0  
+  network 10.4.2.0/24 area 0.0.0.0
+  
