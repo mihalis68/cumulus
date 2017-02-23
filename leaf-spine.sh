@@ -23,6 +23,10 @@ done
 
 if [[ ! -f $CUMULUS_IMAGE ]]; then
     echo "$0 : Error could not find ${CUMULUS_IMAGE}"
+
+    echo "$0 : You have to obtain the Cumulus .ova file yourself by registering with Cumulus and accepting the licensing agreement."
+    echo "$0 : Please see https://cumulusnetworks.com/products/cumulus-vx/"
+
     exit
 fi
 
