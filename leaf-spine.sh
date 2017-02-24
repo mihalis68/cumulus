@@ -92,6 +92,15 @@ function stopVM() {
     fi
 }
 
+function adjust_mgmt() {
+    VMNAME=$1
+    NIC=$2
+    vftrace "adjust_mgmt $VMNAME $NIC\n"
+    $VBM modifyvm "${VMNAME}" --nic"${NIC}" hostonly             >/dev/null 2>&1
+    $VBM modifyvm "${VMNAME}" --hostonlyadapter"${NIC}" vboxnet0 >/dev/null 2>&1
+}
+
+MGMT_NIC_TYPE=
 
 for LEAF in 1 2; do
     VMNAME="${VM_PREFIX}-leaf${LEAF}"
@@ -105,10 +114,13 @@ for LEAF in 1 2; do
 	$VBM import $CUMULUS_IMAGE ${COMMON_OPTIONS} -vmname "${VMNAME}" >/dev/null 2>&1
 	vftrace "done\n"
 	vftrace "Modify NICs ... "       
-	$VBM modifyvm "${VMNAME}" --nic1 bridged --bridgeadapter1 en0    >/dev/null 2>&1
-	$VBM modifyvm "${VMNAME}" --nic2 intnet --intnet2 l${LEAF}s1     >/dev/null 2>&1
-	$VBM modifyvm "${VMNAME}" --nic2 intnet --intnet3 l${LEAF}s2     >/dev/null 2>&1
-	$VBM modifyvm "${VMNAME}" --nic2 intnet --intnet4 leaf${LEAF}    >/dev/null 2>&1
+
+#	$VBM modifyvm "${VMNAME}" --nic1 bridged --bridgeadapter1 en0    >/dev/null 2>&1
+	adjust_mgmt "${VMNAME}" 1
+
+	$VBM modifyvm "${VMNAME}" --nic2 intnet --intnet l${LEAF}s1     >/dev/null 2>&1
+	$VBM modifyvm "${VMNAME}" --nic2 intnet --intnet l${LEAF}s2     >/dev/null 2>&1
+	$VBM modifyvm "${VMNAME}" --nic2 intnet --intnet leaf${LEAF}    >/dev/null 2>&1
 	vftrace "done\n"
     else
 	vftrace "${VMNAME} exists\n"
@@ -129,10 +141,13 @@ for SPINE in 1 2; do
 	$VBM import $CUMULUS_IMAGE ${COMMON_OPTIONS} -vmname "${VMNAME}" >/dev/null 2>&1
 	vftrace "done\n"
 	vftrace "Modify NICs ... "       
-	$VBM modifyvm "${VMNAME}" --nic1 bridged --bridgeadapter1 en0    >/dev/null 2>&1
-	$VBM modifyvm "${VMNAME}" --nic2 intnet --intnet2 l${SPINE}s1    >/dev/null 2>&1
-	$VBM modifyvm "${VMNAME}" --nic2 intnet --intnet3 l${SPINE}s2    >/dev/null 2>&1
-	$VBM modifyvm "${VMNAME}" --nic2 intnet --intnet4 spine${SPINE}  >/dev/null 2>&1
+
+#	$VBM modifyvm "${VMNAME}" --nic1 bridged --bridgeadapter1 en0    >/dev/null 2>&1
+	adjust_mgmt "${VMNAME}" 1
+
+	$VBM modifyvm "${VMNAME}" --nic2 intnet --intnet l${SPINE}s1    >/dev/null 2>&1
+	$VBM modifyvm "${VMNAME}" --nic2 intnet --intnet l${SPINE}s2    >/dev/null 2>&1
+	$VBM modifyvm "${VMNAME}" --nic2 intnet --intnet spine${SPINE}  >/dev/null 2>&1
 	vftrace "done\n"
     else
 	vftrace "${VMNAME} exists\n"
@@ -180,9 +195,13 @@ function preconfig_vm() {
     if [[ -n "$RUNNING" ]]; then
 	vftrace "$VMNAME is running\n"
 	IP=`getvminfo "${VMNAME}"`
-	vftrace "Now configuring ${VNAME} ..."
-	cat ~/.ssh/id_rsa.pub | sshpass -p 'CumulusLinux!' $SSHCMD cumulus@${IP} 'umask 0077; mkdir -p .ssh; cat >> .ssh/authorized_keys'
-	vftrace "Key copied\n"
+	if [[ -z "$IP" ]]; then
+	    echo "$VMNAME has no IP address!"
+	else
+	    vftrace "Now configuring ${VMNAME} ($IP) ..."
+	    cat ~/.ssh/id_rsa.pub | sshpass -p 'CumulusLinux!' $SSHCMD cumulus@${IP} 'umask 0077; mkdir -p .ssh; cat >> .ssh/authorized_keys'
+	    vftrace "Key copied\n"
+	fi
     fi
 }
 
@@ -207,31 +226,39 @@ declare -a ADDRS
 for SPINE in 1 2; do
     VMNAME="${VM_PREFIX}-spine${SPINE}"
     preconfig_vm "${VMNAME}"
-    ADDRS["$SPINE"]="$IP"
-    ${SCPCMD} Quagga.conf.spine${SPINE} interfaces.spine${SPINE} daemons sudo cumulus@"${IP}":/tmp
-    echo "CumulusLinux!" | ${SSHCMD} -t cumulus@${IP} "sudo -S cp /tmp/sudo /etc/sudoers.d/cumulus "
-    ${SSHCMD} -t cumulus@"${IP}" "sudo cp /tmp/interfaces.spine${SPINE} /etc/network/interfaces"
-    ${SSHCMD} -t cumulus@"${IP}" "sudo cp /tmp/daemons /etc/quagga/daemons"
-    ${SSHCMD} -t cumulus@"${IP}" "sudo cp /tmp/Quagga.conf.spine${SPINE} /etc/network/Quagga.conf"
-    ${SSHCMD} -t cumulus@"${IP}" "sudo systemctl restart networking"
-    ${SSHCMD} -t cumulus@"${IP}" "sudo systemctl restart quagga.service"
+    if [[ -n "$IP" ]]; then
+	ADDRS["$SPINE"]="$IP"
+	${SCPCMD} Quagga.conf.spine${SPINE} interfaces.spine${SPINE} daemons sudo cumulus@"${IP}":/tmp
+	echo "CumulusLinux!" | ${SSHCMD} -t cumulus@${IP} "sudo -S cp /tmp/sudo /etc/sudoers.d/cumulus "
+	${SSHCMD} -t cumulus@"${IP}" "sudo cp /tmp/interfaces.spine${SPINE} /etc/network/interfaces"
+	${SSHCMD} -t cumulus@"${IP}" "sudo cp /tmp/daemons /etc/quagga/daemons"
+	${SSHCMD} -t cumulus@"${IP}" "sudo cp /tmp/Quagga.conf.spine${SPINE} /etc/network/Quagga.conf"
+	${SSHCMD} -t cumulus@"${IP}" "sudo systemctl restart networking"
+	${SSHCMD} -t cumulus@"${IP}" "sudo systemctl restart quagga.service"
+    fi
 done
 
 for LEAF in 1 2; do
     VMNAME="${VM_PREFIX}-leaf${LEAF}"
     preconfig_vm "${VMNAME}"
-    ADDRS[$LEAF+2]="$IP"
-    ${SCPCMD} Quagga.conf.leaf${LEAF} interfaces.leaf${LEAF} daemons sudo cumulus@"${IP}":/tmp
-    echo "CumulusLinux!" | ${SSHCMD} -t cumulus@${IP} "sudo -S cp /tmp/sudo /etc/sudoers.d/cumulus "
-    ${SSHCMD} -t cumulus@"${IP}" "sudo cp /tmp/interfaces.leaf${LEAF} /etc/network/interfaces"
-    ${SSHCMD} -t cumulus@"${IP}" "sudo cp /tmp/daemons /etc/quagga/daemons"
-    ${SSHCMD} -t cumulus@"${IP}" "sudo cp /tmp/Quagga.conf.leaf${LEAF} /etc/network/Quagga.conf"
-    ${SSHCMD} -t cumulus@"${IP}" "sudo systemctl restart networking"
-    ${SSHCMD} -t cumulus@"${IP}" "sudo systemctl restart quagga.service"
-    
+    if [[ -n "$IP" ]]; then
+	ADDRS[$LEAF+2]="$IP"
+	${SCPCMD} Quagga.conf.leaf${LEAF} interfaces.leaf${LEAF} daemons sudo cumulus@"${IP}":/tmp
+	echo "CumulusLinux!" | ${SSHCMD} -t cumulus@${IP} "sudo -S cp /tmp/sudo /etc/sudoers.d/cumulus "
+	${SSHCMD} -t cumulus@"${IP}" "sudo cp /tmp/interfaces.leaf${LEAF} /etc/network/interfaces"
+	${SSHCMD} -t cumulus@"${IP}" "sudo cp /tmp/daemons /etc/quagga/daemons"
+	${SSHCMD} -t cumulus@"${IP}" "sudo cp /tmp/Quagga.conf.leaf${LEAF} /etc/network/Quagga.conf"
+	${SSHCMD} -t cumulus@"${IP}" "sudo systemctl restart networking"
+	${SSHCMD} -t cumulus@"${IP}" "sudo systemctl restart quagga.service"
+    fi
 done
 
-vftrace "All VMs configured\n"
+if [[ -z "$IP1" && -z "$IP2" && -z "$IP3" && -z "$IP4" ]]; then
+    vftrace "Some VMs didn't get IP addresses, tests not attempted\n"
+    exit
+else
+    vftrace "All VMs configured\n"
+fi
 
 # run tests
 IP1=${ADDRS[1]}
