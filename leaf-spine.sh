@@ -40,9 +40,8 @@ function vftrace() {
 function delvm_if_force() {
     EXISTS=""
     VMNAME="$1"
-    $VBM showvminfo "${VMNAME}" >/dev/null 2>&1
-    RES=$?
-    if [[ ${RES} -eq 0 ]]; then
+    MATCH=`$VBM list vms | grep "${VMNAME}"`
+    if [[ -n "${MATCH}" ]]; then
 	EXISTS=true
 	if [[ -n "${FORCE}" ]]; then
 	    vftrace "Deleting $VMNAME due to force ... "
@@ -92,12 +91,19 @@ function stopVM() {
     fi
 }
 
+# management network type
+MNET=bridged
+
 function adjust_mgmt() {
     VMNAME=$1
     NIC=$2
     vftrace "adjust_mgmt $VMNAME $NIC\n"
-    $VBM modifyvm "${VMNAME}" --nic"${NIC}" hostonly             >/dev/null 2>&1
-    $VBM modifyvm "${VMNAME}" --hostonlyadapter"${NIC}" vboxnet0 >/dev/null 2>&1
+    if [[ "${MNET}" = bridged ]]; then
+	$VBM modifyvm "${VMNAME}" --nic1 bridged --bridgeadapter1 en0    >/dev/null 2>&1
+    else
+	$VBM modifyvm "${VMNAME}" --nic"${NIC}" hostonly                 >/dev/null 2>&1
+	$VBM modifyvm "${VMNAME}" --hostonlyadapter"${NIC}" vboxnet0     >/dev/null 2>&1
+    fi
 }
 
 MGMT_NIC_TYPE=
@@ -115,7 +121,6 @@ for LEAF in 1 2; do
 	vftrace "done\n"
 	vftrace "Modify NICs ... "       
 
-#	$VBM modifyvm "${VMNAME}" --nic1 bridged --bridgeadapter1 en0    >/dev/null 2>&1
 	adjust_mgmt "${VMNAME}" 1
 
 	$VBM modifyvm "${VMNAME}" --nic2 intnet --intnet l${LEAF}s1     >/dev/null 2>&1
@@ -142,7 +147,6 @@ for SPINE in 1 2; do
 	vftrace "done\n"
 	vftrace "Modify NICs ... "       
 
-#	$VBM modifyvm "${VMNAME}" --nic1 bridged --bridgeadapter1 en0    >/dev/null 2>&1
 	adjust_mgmt "${VMNAME}" 1
 
 	$VBM modifyvm "${VMNAME}" --nic2 intnet --intnet l${SPINE}s1    >/dev/null 2>&1
@@ -168,10 +172,13 @@ function getvminfo {
         -e 's/_\([0-9A-Fa-f]\{2\}\)/:\1_/' \
         -e 's/_\([0-9A-Fa-f]\{2\}\)/:\1/'`
 
-    MAC1=`echo $MAC1 | sed -e 's/^0//' -e 's/:0/:/'`
+    MAC1=`echo $MAC1 | sed -e 's/^0//' -e 's/:0/:/g'`
     
     IP=`arp -na | grep -i $MAC1 | awk '{print $2}' | tr -d \( | tr -d \)`
     echo $IP    
+    if [[ -z "$IP" ]]; then
+	$VBM showvminfo "$HOSTNAME" --machinereadable | grep macaddress1 | tr -d \" | tr = " " | awk '{print $2}' > "${HOSTNAME}fail.txt"
+    fi
 }
 
 SOCKETDIR=${HOME}/.ssh/sockets
@@ -186,6 +193,8 @@ SSH_COMMAND_OPTS="-o ControlMaster=auto -o ControlPath=${SOCKETDIR}/%r@%h-%p -o 
 SSHCOMMON="-q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o VerifyHostKeyDNS=no"
 SSHCMD="ssh $SSH_COMMAND_OPTS ${SSHCOMMON}"
 SCPCMD="scp $SSH_COMMAND_OPTS ${SSHCOMMON}"
+
+declare -a ADDRS
 
 # Work out the IP address of this VM and then install an ssh key to
 # allow easy access from now on
@@ -203,6 +212,7 @@ function preconfig_vm() {
 	    vftrace "Key copied\n"
 	fi
     fi
+    echo $IP
 }
 
 # Get the VMs started
@@ -221,28 +231,12 @@ vftrace "Updating arp for $LOCALNET ..."
 nmap -sn $LOCALNET >/dev/null 2>&1
 vftrace "done\n"
 
-declare -a ADDRS
-
-for SPINE in 1 2; do
-    VMNAME="${VM_PREFIX}-spine${SPINE}"
-    preconfig_vm "${VMNAME}"
-    if [[ -n "$IP" ]]; then
-	ADDRS["$SPINE"]="$IP"
-	${SCPCMD} Quagga.conf.spine${SPINE} interfaces.spine${SPINE} daemons sudo cumulus@"${IP}":/tmp
-	echo "CumulusLinux!" | ${SSHCMD} -t cumulus@${IP} "sudo -S cp /tmp/sudo /etc/sudoers.d/cumulus "
-	${SSHCMD} -t cumulus@"${IP}" "sudo cp /tmp/interfaces.spine${SPINE} /etc/network/interfaces"
-	${SSHCMD} -t cumulus@"${IP}" "sudo cp /tmp/daemons /etc/quagga/daemons"
-	${SSHCMD} -t cumulus@"${IP}" "sudo cp /tmp/Quagga.conf.spine${SPINE} /etc/network/Quagga.conf"
-	${SSHCMD} -t cumulus@"${IP}" "sudo systemctl restart networking"
-	${SSHCMD} -t cumulus@"${IP}" "sudo systemctl restart quagga.service"
-    fi
-done
 
 for LEAF in 1 2; do
     VMNAME="${VM_PREFIX}-leaf${LEAF}"
     preconfig_vm "${VMNAME}"
     if [[ -n "$IP" ]]; then
-	ADDRS[$LEAF+2]="$IP"
+	ADDRS[$LEAF]="$IP"
 	${SCPCMD} Quagga.conf.leaf${LEAF} interfaces.leaf${LEAF} daemons sudo cumulus@"${IP}":/tmp
 	echo "CumulusLinux!" | ${SSHCMD} -t cumulus@${IP} "sudo -S cp /tmp/sudo /etc/sudoers.d/cumulus "
 	${SSHCMD} -t cumulus@"${IP}" "sudo cp /tmp/interfaces.leaf${LEAF} /etc/network/interfaces"
@@ -250,9 +244,37 @@ for LEAF in 1 2; do
 	${SSHCMD} -t cumulus@"${IP}" "sudo cp /tmp/Quagga.conf.leaf${LEAF} /etc/network/Quagga.conf"
 	${SSHCMD} -t cumulus@"${IP}" "sudo systemctl restart networking"
 	${SSHCMD} -t cumulus@"${IP}" "sudo systemctl restart quagga.service"
+    else
+	vftrace "Couldn't finish configuring $VMNAME\n"
+	exit
     fi
 done
 
+for SPINE in 1 2; do
+    VMNAME="${VM_PREFIX}-spine${SPINE}"
+    preconfig_vm "${VMNAME}"
+    if [[ -n "$IP" ]]; then
+	ADDRS["$SPINE"+2]="$IP"
+	${SCPCMD} Quagga.conf.spine${SPINE} interfaces.spine${SPINE} daemons sudo cumulus@"${IP}":/tmp
+	echo "CumulusLinux!" | ${SSHCMD} -t cumulus@${IP} "sudo -S cp /tmp/sudo /etc/sudoers.d/cumulus "
+	${SSHCMD} -t cumulus@"${IP}" "sudo cp /tmp/interfaces.spine${SPINE} /etc/network/interfaces"
+	${SSHCMD} -t cumulus@"${IP}" "sudo cp /tmp/daemons /etc/quagga/daemons"
+	${SSHCMD} -t cumulus@"${IP}" "sudo cp /tmp/Quagga.conf.spine${SPINE} /etc/network/Quagga.conf"
+	${SSHCMD} -t cumulus@"${IP}" "sudo systemctl restart networking"
+	${SSHCMD} -t cumulus@"${IP}" "sudo systemctl restart quagga.service"
+    else
+	vftrace "Couldn't finish configuring $VMNAME\n"
+	exit
+    fi
+done
+
+# run tests
+IP1=${ADDRS[1]}
+IP2=${ADDRS[2]}
+IP3=${ADDRS[3]}
+IP4=${ADDRS[4]}
+
+vftrace "IPs $IP1 $IP2 $IP3 $IP4\n"
 if [[ -z "$IP1" && -z "$IP2" && -z "$IP3" && -z "$IP4" ]]; then
     vftrace "Some VMs didn't get IP addresses, tests not attempted\n"
     exit
@@ -260,10 +282,5 @@ else
     vftrace "All VMs configured\n"
 fi
 
-# run tests
-IP1=${ADDRS[1]}
-IP2=${ADDRS[2]}
-IP3=${ADDRS[3]}
-IP4=${ADDRS[4]}
 vftrace "IPs : $IP1 $IP2 $IP3 $IP4\n"
 ${SSHCMD} -t cumulus@"${IP1}" "ping -c1 $IP2; ping -c1 $IP3; ping -c1 $IP4"
