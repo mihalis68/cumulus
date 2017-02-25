@@ -6,6 +6,12 @@
 #
 
 VBM=/usr/local/bin/VBoxManage
+
+if [[ ! -x $VBM ]]; then
+    echo "Error : \"$VBM\" not found or not executable"
+    exit
+fi
+
 CUMULUS_IMAGE=cumulus-linux-3.2.1-vx-amd64-1486153138.ac46c24zd00d13e.ova
 
 while [[ -n "$1" ]]; do
