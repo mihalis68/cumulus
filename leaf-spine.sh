@@ -159,26 +159,38 @@ for SPINE in 1 2; do
 done
 
 function getvminfo {
+
     
     HOSTNAME="$1"
 
-    # extract the first mac address for this VM
-    MAC1=`$VBM showvminfo "$HOSTNAME" --machinereadable | grep macaddress1 | tr -d \" | tr = " " | awk '{print $2}'`
-    # add the customary colons in
-    MAC1=`echo $MAC1 | sed -e 's/^\([0-9A-Fa-f]\{2\}\)/\1_/'  \
+    vftrace "Trying to get IP address for $HOSTNAME\n"
+
+    TRIES="$2"
+
+    for TRY in `seq -s" " 1 ${TRIES}`; do
+
+	# extract the first mac address for this VM
+	MAC1=`$VBM showvminfo "$HOSTNAME" --machinereadable | grep macaddress1 | tr -d \" | tr = " " | awk '{print $2}'`
+	# add the customary colons in
+	MAC1=`echo $MAC1 | sed -e 's/^\([0-9A-Fa-f]\{2\}\)/\1_/'  \
         -e 's/_\([0-9A-Fa-f]\{2\}\)/:\1_/' \
         -e 's/_\([0-9A-Fa-f]\{2\}\)/:\1_/' \
         -e 's/_\([0-9A-Fa-f]\{2\}\)/:\1_/' \
         -e 's/_\([0-9A-Fa-f]\{2\}\)/:\1_/' \
         -e 's/_\([0-9A-Fa-f]\{2\}\)/:\1/'`
 
-    MAC1=`echo $MAC1 | sed -e 's/^0//' -e 's/:0/:/g'`
-    
-    IP=`arp -na | grep -i $MAC1 | awk '{print $2}' | tr -d \( | tr -d \)`
-    echo $IP    
-    if [[ -z "$IP" ]]; then
-	$VBM showvminfo "$HOSTNAME" --machinereadable | grep macaddress1 | tr -d \" | tr = " " | awk '{print $2}' > "${HOSTNAME}fail.txt"
-    fi
+	MAC1=`echo $MAC1 | sed -e 's/^0//' -e 's/:0/:/g'`
+
+	IP=`arp -na | grep -i $MAC1 | awk '{print $2}' | tr -d \( | tr -d \)`
+	if [[ -n "$IP" ]]; then
+	    vftrace "${HOSTNAME} has IP address $IP\n"
+	    break
+	else
+	    vftrace "$HOSTNAME not up yet.\n"
+	    vftrace "Will retry getting IP address ...\n"
+	    sleep 5
+	fi
+    done
 }
 
 SOCKETDIR=${HOME}/.ssh/sockets
@@ -194,7 +206,6 @@ SSHCOMMON="-q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o Ver
 SSHCMD="ssh $SSH_COMMAND_OPTS ${SSHCOMMON}"
 SCPCMD="scp $SSH_COMMAND_OPTS ${SSHCOMMON}"
 
-declare -a ADDRS
 
 # Work out the IP address of this VM and then install an ssh key to
 # allow easy access from now on
@@ -203,7 +214,7 @@ function preconfig_vm() {
     check_vm_running "$VMNAME"
     if [[ -n "$RUNNING" ]]; then
 	vftrace "$VMNAME is running\n"
-	IP=`getvminfo "${VMNAME}"`
+	getvminfo "${VMNAME}" 5
 	if [[ -z "$IP" ]]; then
 	    echo "$VMNAME has no IP address!"
 	else
@@ -212,7 +223,6 @@ function preconfig_vm() {
 	    vftrace "Key copied\n"
 	fi
     fi
-    echo $IP
 }
 
 # Get the VMs started
@@ -225,11 +235,13 @@ for SPINE in 1 2; do
     startVM "$VMNAME"
 done
 
-sleep 20
+
 LOCALNET="10.0.1.0/24"
 vftrace "Updating arp for $LOCALNET ..." 
 nmap -sn $LOCALNET >/dev/null 2>&1
 vftrace "done\n"
+
+declare -a ADDRS
 
 
 for LEAF in 1 2; do
@@ -283,4 +295,13 @@ else
 fi
 
 vftrace "IPs : $IP1 $IP2 $IP3 $IP4\n"
-${SSHCMD} -t cumulus@"${IP1}" "ping -c1 $IP2; ping -c1 $IP3; ping -c1 $IP4"
+for IP in `seq -s" " 1 4`; do
+    for OTHER in `seq -s" " 1 4`; do
+	if [[ "$IP" -ne "$OTHER" ]]; then
+	    CMD="$CMD ping -c1 ${ADDRS[OTHER]} ;"
+	fi
+    done
+    vftrace "${CMD}\n"
+    ${SSHCMD} -t cumulus@"${ADDRS[IP]}" "${CMD}"
+    CMD=""
+done
