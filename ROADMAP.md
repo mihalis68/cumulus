@@ -18,14 +18,14 @@ VirtualBox might be helpful.
 
 Approximate roadmap for this is :
 
-# practice configuring cumulus in vmware from script (bridged n/w)
+1. practice configuring cumulus in vmware from script (bridged n/w)
 
-# integrate DHCP of cumulus VMs with bcpc bootstrap node (hostonly
+2. integrate DHCP of cumulus VMs with bcpc bootstrap node (hostonly
   n/w)
 
-# convert cumulus VM configurations to support bcpc networks
+3. convert cumulus VM configurations to support bcpc networks
 
-# move bcpc VMs to single virtual leaf switch (still L2 spanned)
+4. move bcpc VMs to single virtual leaf switch (still L2 spanned)
 
-# when bcpc supports pure L3, distribute nodes across multiple leaves
+5. when bcpc supports pure L3, distribute nodes across multiple leaves
   (pure L3)
