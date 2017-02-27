@@ -97,7 +97,19 @@ function stopVM() {
     fi
 }
 
-# management network type
+# management network type - bridged or host-only
+
+# bridged networking will allow traffic from the VMs to go via the
+# host adapter out to the surrounding network. If there is a DHCP
+# server there that gives them an address, then they will be able to
+# join the network
+
+# note that hostonly networking will not be even remotely functional
+# right now as the VMs will not find a DHCP server and hence will
+# never become network accessible. The intention is to develop this
+# script further and eventually bootstrap these cumulus VMs within a
+# chef-bcpc network
+
 MNET=bridged
 
 function adjust_mgmt() {
